@@ -1,0 +1,31 @@
+MapleBill – Invoices & Estimates (Android app)
+==============================================
+
+HOW TO PUT IT ONLINE (one time, free, about 2 minutes)
+1. Unzip MapleBill-app.zip on a computer. You get a folder named "MapleBill".
+2. Go to https://app.netlify.com/drop (create a free account with your email).
+3. Drag the whole "MapleBill" folder onto the page.
+4. Netlify gives you a link like https://your-name.netlify.app
+   (You can rename it in Site settings, e.g. northridge-invoices.netlify.app)
+   Or use GitHub Pages: put these files in a public repository, then
+   Settings → Pages → Deploy from branch → main / (root).
+
+HOW TO INSTALL ON ANY ANDROID PHONE
+1. Open the link in Chrome on the phone.
+2. Tap "Install" on the banner (or Chrome menu ⋮ → "Install app" / "Add to Home screen").
+3. MapleBill appears in the app drawer with its own icon and opens full-screen.
+   After the first open it also works with no internet.
+Anyone you give the link to can install it the same way. Each phone keeps its own data.
+
+KEEP YOUR DATA SAFE
+Everything is stored on the phone. Use Settings → Backup & restore → "Share backup"
+to save a copy to Google Drive regularly (e.g. once a month). On a new phone,
+open the app and tap "Restore a backup" on the welcome screen.
+
+WANT IT IN THE GOOGLE PLAY STORE?
+Go to https://www.pwabuilder.com, paste your link, and choose "Android".
+It produces the Play Store package for you (a Google Play developer account costs US$25 once).
+
+UPDATING
+Replace the files on your host. Phones pick up the new version the next time
+the app is opened online. Data is kept.
