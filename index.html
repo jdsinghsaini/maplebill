@@ -612,7 +612,7 @@ const PROVINCES={ON:['HST',13],NS:['HST',14],NB:['HST',15],NL:['HST',15],PE:['HS
 const DEFAULT_SETTINGS={bizName:'',ownerName:'',address:'',phone:'',email:'',website:'',taxNumber:'',logo:'',
   province:'ON',taxLabel:'HST',taxRate:13,tax2Label:'',tax2Rate:0,
   headerNote:'',footerNote:'Thank you for your business!',invTerms:'Payment due within 30 days. E-transfer accepted.',estTerms:'This estimate is valid for 30 days.',
-  estPrefix:'EST-',invPrefix:'INV-',nextEst:1001,nextInv:1001,dueDays:30,validDays:30,depositPct:0,setupDone:false};
+  estPrefix:'EST-',invPrefix:'INV-',nextEst:1001,nextInv:1001,dueDays:30,validDays:30,depositPct:0,apSign:true,apLink:true,apRecord:true,setupDone:false};
 const EXP_CATS=['Materials & supplies','Subcontractors','Tools & equipment','Vehicle & fuel','Phone & internet','Office & software','Insurance','Advertising','Meals (50%)','Rent','Bank & card fees','Other'];
 let DB=load();
 function load(){
@@ -725,6 +725,7 @@ function shell({title,back,action,tab,fab}){
 function render(){
   const [r,id]=(location.hash.slice(1)||'home').split('/');
   const v=document.getElementById('view');
+  if(r==='remote-sign')return viewRemoteSign(v,id);
   if(!S().setupDone&&r!=='business'&&r!=='data'){return viewWelcome(v)}
   ({home:viewHome,estimates:()=>viewDocs(v,'estimate'),invoices:()=>viewDocs(v,'invoice'),clients:viewClients,client:()=>viewClient(v,id),
     settings:viewSettings,business:viewBusiness,edit:()=>viewEdit(v,id),doc:()=>viewDoc(v,id),reports:viewReports,data:viewData,
@@ -874,6 +875,10 @@ function viewBusiness(v){
    <div class="grid2"><label class="f"><span>Invoice prefix</span><input class="i" name="invPrefix" value="${esc(s.invPrefix)}"></label><label class="f"><span>Next invoice #</span><input class="i" name="nextInv" type="number" value="${s.nextInv}"></label></div>
    <div class="grid2"><label class="f"><span>Invoice due (days)</span><input class="i" name="dueDays" type="number" value="${s.dueDays}"></label><label class="f"><span>Estimate valid (days)</span><input class="i" name="validDays" type="number" value="${s.validDays}"></label></div>
    <label class="f"><span>Default deposit on estimates (%)</span><input class="i" name="depositPct" type="number" step="1" inputmode="decimal" value="${s.depositPct||''}" placeholder="0 = no deposit"></label></div>
+  <div class="card"><h2>How clients approve estimates</h2><div class="small" style="margin:-6px 0 10px">Turn on the ways you want to use. All are free – no Adobe or other apps needed. Turn all off to just mark estimates Accepted.</div>
+   <label class="chk" style="margin-bottom:10px;color:var(--ink)"><input type="checkbox" name="apSign" ${s.apSign!==false?'checked':''}> <span><b>Sign on my phone</b> – client signs with a finger when you're together</span></label>
+   <label class="chk" style="margin-bottom:10px;color:var(--ink)"><input type="checkbox" name="apLink" ${s.apLink!==false?'checked':''}> <span><b>Signing link</b> – a link in your estimate message; client signs on their own phone</span></label>
+   <label class="chk" style="color:var(--ink)"><input type="checkbox" name="apRecord" ${s.apRecord!==false?'checked':''}> <span><b>Approval by message</b> – client replies “I accept”, you tap Record approval</span></label></div>
   <button class="btn btn-p btn-block" id="bsave">${ic('check')} Save</button></form>`;
   let logo=s.logo;
   const setPrev=()=>{document.getElementById('lp').innerHTML=logo?`<img src="${logo}" alt="">`:'No logo'};
@@ -883,6 +888,7 @@ function viewBusiness(v){
   v.querySelector('#bf').onsubmit=e=>{e.preventDefault();const d=Object.fromEntries(new FormData(e.target));
     if(!d.bizName.trim())return toast('Please enter your business name');
     for(const k of ['taxRate','tax2Rate','nextEst','nextInv','dueDays','validDays','depositPct'])d[k]=+d[k]||0;
+    for(const k of ['apSign','apLink','apRecord'])d[k]=d[k]==='on';
     Object.assign(DB.settings,d,{logo,setupDone:true});if(save()){toast('Saved');go(first?'home':'settings')}};
 }
 function resizeImage(file,max,fmt='png'){return new Promise((res,rej)=>{const r=new FileReader();r.onerror=rej;r.onload=()=>{const im=new Image();im.onerror=rej;im.onload=()=>{
@@ -986,7 +992,7 @@ function viewEdit(v,id){
     if(!num){if(d.type==='invoice'){num=s.invPrefix+s.nextInv;s.nextInv++}else{num=s.estPrefix+s.nextEst;s.nextEst++}}
     d.number=num;d.updatedAt=Date.now();
     d.deposit=+d.deposit||0;
-    if(d.signature&&origTotal!==null&&calc(d).total!==origTotal){d.signature='';d.signedName='';d.signedAt='';if(d.status==='accepted')d.status='sent';setTimeout(()=>toast('Total changed – the client signature was removed. Ask them to sign again.'),400)}
+    if((d.signature||d.approval)&&origTotal!==null&&calc(d).total!==origTotal){d.signature='';d.signedName='';d.signedAt='';d.approval=null;if(d.status==='accepted')d.status='sent';setTimeout(()=>toast('Total changed – the client approval was removed. Ask them to approve again.'),400)}
     const wasNew=d.isNew;delete d.isNew;
     if(wasNew)DB.docs.push(d);else{const i=DB.docs.findIndex(x=>x.id===d.id);DB.docs[i]=d}
     if(!save())return null;cleanupFiles(origPhotos.filter(p=>!d.photos.includes(p)));return d;};
@@ -995,8 +1001,8 @@ function viewEdit(v,id){
 }
 
 /* ---------- Document view ---------- */
-function paperHTML(d){
-  const s=S(),c=calc(d),isInv=d.type==='invoice';
+function paperHTML(d,s=S()){
+  const c=calc(d),isInv=d.type==='invoice';
   const bizLines=[s.address,s.phone,s.email,s.website].filter(Boolean).map(x=>esc(x).replace(/\n/g,'<br>')).join('<br>');
   return `<div class="paper" id="paper"><div class="ph"><div>${s.logo?`<img src="${s.logo}" alt="">`:`<b style="font-size:17px">${esc(s.bizName)}</b>`}</div>
    <div class="biz"><b>${esc(s.bizName)}</b><br>${bizLines}${s.taxNumber?`<br>${esc(s.taxLabel)} # ${esc(s.taxNumber)}`:''}${s.headerNote?`<br><i>${esc(s.headerNote)}</i>`:''}</div></div>
@@ -1013,7 +1019,8 @@ function paperHTML(d){
     ${isInv&&c.paid?`${payList(d).map(p=>`<div><span>${esc(p.note||'Payment')} ${fmtDate(p.date)}</span><span>−${fmtMoney(p.amount)}</span></div>`).join('')}<div style="font-weight:700"><span>Balance due</span><span>${fmtMoney(c.balance)}</span></div>`:''}</div>
    ${d.notes?`<div class="mt"><b>Notes</b><div class="small">${esc(d.notes).replace(/\n/g,'<br>')}</div></div>`:''}
    ${d.terms?`<div class="mt"><b>Terms</b><div class="small">${esc(d.terms).replace(/\n/g,'<br>')}</div></div>`:''}
-   ${d.signature?`<div class="sigbox"><div class="small">ACCEPTED BY CLIENT</div><img data-file="${d.signature}" alt="Client signature"><div><b>${esc(d.signedName)}</b> <span class="small">· ${fmtDateTime(d.signedAt)}</span></div></div>`:''}
+   ${d.signature||d.signatureData?`<div class="sigbox"><div class="small">ACCEPTED BY CLIENT</div><img ${d.signatureData?`src="${d.signatureData}"`:`data-file="${d.signature}"`} alt="Client signature"><div><b>${esc(d.signedName)}</b> <span class="small">· ${fmtDateTime(d.signedAt)}${d.verifyCode?' · Code '+esc(d.verifyCode):''}</span></div></div>`
+    :d.approval?`<div class="sigbox" id="apbox"><div class="small">APPROVED BY CLIENT</div><div><b>${esc(d.approval.name)}</b> <span class="small">· ${esc(d.approval.method)} · ${fmtDate(d.approval.date)}${d.approval.code?' · Code '+esc(d.approval.code):''}</span></div></div>`:''}
    ${(d.photos||[]).length?`<div class="mt"><b>Photos</b><div class="photos">${d.photos.map((p,i)=>`<img data-file="${p}" alt="Photo ${i+1}">`).join('')}</div></div>`:''}
    ${s.footerNote||s.taxNumber?`<div class="foot">${esc(s.footerNote)}${s.footerNote&&s.taxNumber?' · ':''}${s.taxNumber?esc(s.taxLabel)+' # '+esc(s.taxNumber):''}</div>`:''}</div>`;
 }
@@ -1028,17 +1035,19 @@ function viewDoc(v,id){
     actions=st==='paid'?`<button class="btn btn-s" id="unpaid">Mark unpaid</button>`:`<button class="btn btn-g" id="paid">${ic('check')} Mark paid</button><button class="btn btn-s" id="partial">Record payment</button>`;
   }else if(st==='invoiced'){actions=`<button class="btn btn-s" id="openInv">Open invoice ${ic('arrow')}</button>`}
   else{
+    const S0=S(),approved=!!(d.signature||d.approval),anyAp=S0.apSign!==false||S0.apLink!==false||S0.apRecord!==false;
     actions=`<button class="btn btn-p btn-full" id="convert">${ic('inv')} Convert to invoice</button>`+
-     (d.signature?'':`<button class="btn btn-s btn-full" id="signBtn">${ic('pen')} Client signs to accept</button>`)+
-     (c.deposit&&!c.depositPaid?`<button class="btn btn-g" id="depBtn">${ic('check')} Deposit received</button>`:'')+
-     (!d.signature&&st!=='accepted'?`<button class="btn btn-s" id="accept">Accepted</button>`:'')+(st!=='declined'&&!d.signature?`<button class="btn btn-s" id="decline">Declined</button>`:'');
+     (!approved&&S0.apSign!==false?`<button class="btn btn-s" id="signBtn">${ic('pen')} Sign on phone</button>`:'')+
+     (!approved&&(S0.apRecord!==false||S0.apLink!==false)?`<button class="btn btn-s" id="recBtn">${ic('check')} Record approval</button>`:'')+
+     (c.deposit&&!c.depositPaid?`<button class="btn btn-g btn-full" id="depBtn">${ic('check')} Deposit received</button>`:'')+
+     (!approved&&!anyAp&&st!=='accepted'?`<button class="btn btn-s" id="accept">Accepted</button>`:'')+(st!=='declined'&&!approved?`<button class="btn btn-s" id="decline">Declined</button>`:'');
   }
-  v.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div>${badge(st)} <span class="small">${isInv&&c.paid&&st!=='paid'?'Balance '+fmtMoney(c.balance):''}${d.paidDate&&st==='paid'?'Paid '+fmtDate(d.paidDate):''}${d.signature?'Signed '+fmtDate((d.signedAt||'').slice(0,10)||today()):''}</span></div><div style="font-weight:750;font-size:18px">${fmtMoney(c.total)}</div></div>
+  v.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div>${badge(st)} <span class="small">${isInv&&c.paid&&st!=='paid'?'Balance '+fmtMoney(c.balance):''}${d.paidDate&&st==='paid'?'Paid '+fmtDate(d.paidDate):''}${d.signature?'Signed '+fmtDate((d.signedAt||'').slice(0,10)||today()):''}${d.approval?'Approved '+fmtDate(d.approval.date):''}</span></div><div style="font-weight:750;font-size:18px">${fmtMoney(c.total)}</div></div>
    <button class="btn btn-p btn-block" id="send" style="margin-bottom:10px">${ic('share')} Send ${typeName(d.type).toLowerCase()}</button>
    <div class="btn-row" style="margin-bottom:14px">${actions}</div>
    ${paperHTML(d)}
    <div class="btn-row"><button class="btn btn-s" id="pdf">${ic('dl')} PDF</button><button class="btn btn-s" id="dup">${ic('dup')} Duplicate</button><button class="btn btn-d" id="del">${ic('trash')}</button></div>
-   ${d.signature?`<button class="btn btn-block mt" style="background:none;color:var(--muted)" id="unsign">Remove client signature</button>`:''}`;
+   ${d.signature||d.approval?`<button class="btn btn-block mt" style="background:none;color:var(--muted)" id="unsign">Remove client approval</button>`:''}`;
   hydrate(v);
   const $=s=>v.querySelector(s);
   document.getElementById('editBtn').onclick=()=>go('edit/'+d.id);
@@ -1054,7 +1063,8 @@ function viewDoc(v,id){
   if($('#accept'))$('#accept').onclick=()=>set({status:'accepted'},'Marked accepted');
   if($('#decline'))$('#decline').onclick=()=>set({status:'declined'},'Marked declined');
   if($('#signBtn'))$('#signBtn').onclick=()=>go('sign/'+d.id);
-  if($('#unsign'))$('#unsign').onclick=async()=>{if(await confirmBox('Remove signature?','The estimate will no longer show as signed.','Remove')){const sg=d.signature;set({signature:'',signedName:'',signedAt:'',status:'sent'},'Signature removed');cleanupFiles([sg])}};
+  if($('#unsign'))$('#unsign').onclick=async()=>{if(await confirmBox('Remove approval?','The estimate will no longer show as approved.','Remove')){const sg=d.signature;set({signature:'',signedName:'',signedAt:'',approval:null,status:'sent'},'Approval removed');cleanupFiles([sg])}};
+  if($('#recBtn'))$('#recBtn').onclick=()=>recordApproval(d);
   if($('#depBtn'))$('#depBtn').onclick=()=>{
     const s=openLayer(`<h3>Deposit received</h3><form class="mt"><div class="grid2"><label class="f"><span>Amount</span><input class="i" name="amt" type="number" step="0.01" inputmode="decimal" value="${c.deposit}"></label><label class="f"><span>Date</span><input class="i" name="date" type="date" value="${today()}"></label></div><button class="btn btn-g btn-block">Save deposit</button></form>`);
     s.querySelector('form').onsubmit=e=>{e.preventDefault();const f=Object.fromEntries(new FormData(e.target));const a=r2(+f.amt||0);if(a<=0)return toast('Enter an amount');
@@ -1109,8 +1119,8 @@ function viewSign(v,id){
 /* ---------- PDF ---------- */
 function hexRGB(h){return [1,3,5].map(i=>parseInt(h.slice(i,i+2),16))}
 async function imgSize(src){return new Promise(r=>{const i=new Image();i.onload=()=>r([i.width,i.height]);i.onerror=()=>r([1,1]);i.src=src})}
-async function buildPDF(d){
-  const {jsPDF}=window.jspdf;const s=S(),c=calc(d),isInv=d.type==='invoice';
+async function buildPDF(d,opts={}){
+  const {jsPDF}=window.jspdf;const s=opts.settings||S(),c=calc(d),isInv=d.type==='invoice';
   const doc=new jsPDF({unit:'pt',format:'letter'});const W=doc.internal.pageSize.getWidth(),H=doc.internal.pageSize.getHeight(),M=44;
   const RED=hexRGB('#D52B1E'),INK=[29,33,37],MUT=[104,112,122];
   let y=M;
@@ -1164,10 +1174,12 @@ async function buildPDF(d){
   // Acceptance / signature (estimates)
   if(!isInv){if(y+110>H-60){doc.addPage();y=M}
     y+=6;doc.setDrawColor(228,231,235);doc.setLineWidth(.6);doc.line(M,y,W-M,y);y+=18;
-    doc.setFont('helvetica','bold');doc.setFontSize(10);doc.setTextColor(...INK);doc.text(d.signature?'Accepted by client':'Client acceptance',M,y);y+=10;
-    const sig=d.signature&&await FS.get(d.signature);
+    const sig=d.signatureData||(d.signature&&await FS.get(d.signature));
+    doc.setFont('helvetica','bold');doc.setFontSize(10);doc.setTextColor(...INK);doc.text(sig?'Accepted by client':d.approval?'Approved by client':'Client acceptance',M,y);y+=10;
     if(sig){try{const [w,h]=await imgSize(sig);const k=Math.min(200/w,60/h);doc.addImage(sig,'PNG',M,y,w*k,h*k);y+=h*k+4}catch(e){y+=4}
-      doc.setFont('helvetica','normal');doc.setFontSize(9.5);doc.setTextColor(...INK);doc.text(`${d.signedName}  ·  signed ${fmtDateTime(d.signedAt)}`,M,y+8);y+=22}
+      doc.setFont('helvetica','normal');doc.setFontSize(9.5);doc.setTextColor(...INK);doc.text(`${d.signedName}  ·  signed ${fmtDateTime(d.signedAt)}${d.verifyCode?'  ·  verification code '+d.verifyCode:''}`,M,y+8);y+=22}
+    else if(d.approval){doc.setFont('helvetica','normal');doc.setFontSize(10);doc.setTextColor(...INK);
+      doc.text(`${d.approval.name}  ·  ${d.approval.method}  ·  ${fmtDate(d.approval.date)}${d.approval.code?'  ·  verification code '+d.approval.code:''}`,M,y+8);y+=24}
     else{y+=40;doc.setDrawColor(...MUT);doc.line(M,y,M+220,y);doc.line(M+260,y,M+400,y);doc.setFont('helvetica','normal');doc.setFontSize(8.5);doc.setTextColor(...MUT);doc.text('Signature',M,y+12);doc.text('Date',M+260,y+12);y+=24}}
   // Photos
   const photos=[];for(const pid of d.photos||[]){const v=await FS.get(pid);if(v)photos.push(v)}
@@ -1191,12 +1203,13 @@ async function saveBlob(blob,name){
 async function downloadPDF(d){try{const p=await buildPDF(d);saveBlob(p.output('blob'),pdfName(d));toast('PDF downloaded')}catch(e){console.error(e);toast('Could not create PDF')}}
 
 /* ---------- Send ---------- */
-function message(d){const s=S(),c=calc(d),isInv=d.type==='invoice';
+function message(d,link){const s=S(),c=calc(d),isInv=d.type==='invoice';
   const first=(d.client.name||'').split(' ')[0];
-  return `Hi ${first||'there'},\n\n${isInv?`Here is invoice ${d.number} for ${fmtMoney(isInv&&c.paid?c.balance:c.total)}${d.due?`, due ${fmtDate(d.due)}`:''}.`:`Here is estimate ${d.number} for ${fmtMoney(c.total)}${d.due?`, valid until ${fmtDate(d.due)}`:''}.${c.deposit&&!c.depositPaid?` A deposit of ${fmtMoney(c.deposit)} is required to book the work.`:''}`}\n\n${isInv&&s.invTerms?s.invTerms+'\n\n':''}Thank you,\n${s.ownerName?s.ownerName+'\n':''}${s.bizName}${s.phone?'\n'+s.phone:''}`}
+  return `Hi ${first||'there'},\n\n${isInv?`Here is invoice ${d.number} for ${fmtMoney(isInv&&c.paid?c.balance:c.total)}${d.due?`, due ${fmtDate(d.due)}`:''}.`:`Here is estimate ${d.number} for ${fmtMoney(c.total)}${d.due?`, valid until ${fmtDate(d.due)}`:''}.${c.deposit&&!c.depositPaid?` A deposit of ${fmtMoney(c.deposit)} is required to book the work.`:''}${approveText(d,link)}`}\n\n${isInv&&s.invTerms?s.invTerms+'\n\n':''}Thank you,\n${s.ownerName?s.ownerName+'\n':''}${s.bizName}${s.phone?'\n'+s.phone:''}`}
 function markSent(d){if(d.status==='draft'){d.status='sent';d.sentAt=Date.now();d.updatedAt=Date.now();save()}}
-function sendSheet(d){
-  const msg=message(d),c=d.client,subj=`${typeName(d.type)} ${d.number} from ${S().bizName}`;
+async function sendSheet(d){
+  const link=d.type==='estimate'&&S().apLink!==false&&!(d.signature||d.approval)?await signLink(d).catch(()=>''):'';
+  const msg=message(d,link),c=d.client,subj=`${typeName(d.type)} ${d.number} from ${S().bizName}`;
   const ph=phoneDigits(c.phone);
   const wa=`https://wa.me/${ph}?text=${encodeURIComponent(msg)}`;
   const sms=`sms:${c.phone?'+'+ph:''}?body=${encodeURIComponent(msg)}`;
@@ -1436,6 +1449,91 @@ function iosTip(){
   return `<div class="ios-tip" id="iosTip"><button class="x" aria-label="Close" onclick="try{localStorage.setItem('maplebill.iosTipHidden','1')}catch(e){};this.parentNode.remove()">${ic('x','width="18" height="18"')}</button>
    <b>Install MapleBill on your iPhone</b><ol><li>Tap the <b>Share</b> button <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-3px"><path d="M12 3v13M7 8l5-5 5 5M5 12v8h14v-8"/></svg> at the bottom of Safari</li><li>Scroll down and tap <b>Add to Home Screen</b></li><li>Tap <b>Add</b></li></ol>
    <div class="small" style="margin-top:6px">Using it from the Home Screen also keeps your data safe.</div></div>`;
+}
+
+/* ---------- Approvals: signing link + record approval ---------- */
+function approveText(d,link){
+  if(d.type!=='estimate'||d.signature||d.approval)return '';const s=S();
+  if(link)return `\n\nReview and sign online (no app needed):\n${link}${s.apRecord!==false?'\n\nOr simply reply "I accept" to approve.':''}`;
+  if(s.apRecord!==false)return '\n\nTo approve, simply reply "I accept".';
+  return '';
+}
+function signPayload(d){const s=S();
+  return JSON.stringify({v:1,b:{n:s.bizName,o:s.ownerName,p:s.phone,e:s.email,a:s.address,w:s.website,tl:s.taxLabel,tn:s.taxNumber,h:s.headerNote,f:s.footerNote},
+    d:{n:d.number,dt:d.date,du:d.due||'',c:{name:d.client.name||'',email:d.client.email||'',phone:d.client.phone||'',address:d.client.address||''},
+      i:d.items.map(it=>[it.desc,+it.qty,+it.rate,it.taxable!==false?1:0]),ds:+d.discount||0,dsT:d.discountType||'amt',tl:d.taxLabel,tr:+d.taxRate||0,t2l:d.tax2Label||'',t2r:+d.tax2Rate||0,
+      dp:+d.deposit||0,dpT:d.depositType||'pct',nt:d.notes||'',tm:d.terms||''}})}
+function verifyCode(str){let h=0x811c9dc5;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,0x01000193)>>>0}const x=h.toString(36).toUpperCase().padStart(7,'0').slice(-6);return x.slice(0,3)+'-'+x.slice(3)}
+const b64u=bytes=>{let s='';for(let i=0;i<bytes.length;i+=0x8000)s+=String.fromCharCode.apply(null,bytes.subarray(i,i+0x8000));return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')};
+const unb64u=str=>{const b=atob(str.replace(/-/g,'+').replace(/_/g,'/'));const u=new Uint8Array(b.length);for(let i=0;i<b.length;i++)u[i]=b.charCodeAt(i);return u};
+async function packStr(str){const raw=new TextEncoder().encode(str);
+  if(typeof CompressionStream!=='undefined'){try{const buf=await new Response(new Blob([raw]).stream().pipeThrough(new CompressionStream('deflate-raw'))).arrayBuffer();return 'z'+b64u(new Uint8Array(buf))}catch(e){}}
+  return 'j'+b64u(raw)}
+async function unpackStr(p){const kind=p[0],bytes=unb64u(p.slice(1));
+  if(kind==='z'){const buf=await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer();return new TextDecoder().decode(buf)}
+  return new TextDecoder().decode(bytes)}
+async function signLink(d){return location.origin+location.pathname+'#remote-sign/'+await packStr(signPayload(d))}
+function recordApproval(d){
+  const s=S(),code=verifyCode(signPayload(d));
+  const methods=[...(s.apLink!==false?['Signed via link']:[]),'WhatsApp reply','Text message','Email','Phone call','In person (verbal)'];
+  const sh=openLayer(`<h3>Record client approval</h3><p class="small" style="margin:4px 0 0">Use this when the client approved by message or signed with the link.</p><form class="mt">
+    <label class="f"><span>Approved by</span><input class="i" name="name" value="${esc(d.client.name)}"></label>
+    <div class="grid2"><label class="f"><span>How</span><select class="i" name="method" id="apm">${methods.map(m=>`<option>${m}</option>`).join('')}</select></label><label class="f"><span>Date</span><input class="i" name="date" type="date" value="${today()}"></label></div>
+    <div class="card" id="apcode" style="background:var(--bg);box-shadow:none;padding:12px">Check the <b>verification code</b> on the client's signed PDF is <b style="font-size:17px;letter-spacing:.05em;color:var(--red)">${code}</b>. If it's different, the estimate was changed – don't accept it.</div>
+    <button class="btn btn-g btn-block">${ic('check')} Save approval</button></form>`);
+  const m=sh.querySelector('#apm'),cb=sh.querySelector('#apcode');const tog=()=>cb.style.display=m.value==='Signed via link'?'':'none';m.onchange=tog;tog();
+  sh.querySelector('form').onsubmit=e=>{e.preventDefault();const f=Object.fromEntries(new FormData(e.target));if(!f.name.trim())return toast('Enter the client name');
+    d.approval={name:f.name.trim(),method:f.method,date:f.date||today(),...(f.method==='Signed via link'?{code}:{})};d.status='accepted';d.updatedAt=Date.now();save();sh.remove();toast('Approval recorded');render()};
+}
+function makePad(cv){const ctx=cv.getContext('2d');let drawn=false,last=null;
+  const size=()=>{const r=cv.getBoundingClientRect(),k=window.devicePixelRatio||1;cv.width=r.width*k;cv.height=r.height*k;ctx.setTransform(k,0,0,k,0,0);ctx.lineWidth=2.6;ctx.lineCap='round';ctx.lineJoin='round';ctx.strokeStyle='#14213d';ctx.fillStyle='#14213d';drawn=false};size();
+  const pt=e=>{const r=cv.getBoundingClientRect();return [e.clientX-r.left,e.clientY-r.top]};
+  cv.addEventListener('pointerdown',e=>{e.preventDefault();try{cv.setPointerCapture(e.pointerId)}catch(_){}last=pt(e);ctx.beginPath();ctx.arc(last[0],last[1],1.2,0,7);ctx.fill();drawn=true});
+  cv.addEventListener('pointermove',e=>{if(!last)return;const p=pt(e);ctx.beginPath();ctx.moveTo(...last);ctx.lineTo(...p);ctx.stroke();last=p;drawn=true});
+  const end=()=>{last=null};cv.addEventListener('pointerup',end);cv.addEventListener('pointercancel',end);
+  return {drawn:()=>drawn,clear:()=>{ctx.clearRect(0,0,cv.width,cv.height);drawn=false},data:()=>cv.toDataURL('image/png')};
+}
+async function viewRemoteSign(v,packed){
+  document.getElementById('tabs').classList.add('hidden');document.getElementById('fab').classList.add('hidden');
+  const top=document.getElementById('topbar');
+  let P,str;try{str=await unpackStr(packed||'');P=JSON.parse(str);if(!P.d||!P.b)throw 0}catch(e){
+    top.innerHTML=`<div class="brand"><h1>Estimate</h1></div>`;v.innerHTML=`<div class="card empty"><b>This link is incomplete.</b><div class="mt">Please ask for the estimate to be sent again. Some apps cut long links – try opening it from WhatsApp or email.</div></div>`;return}
+  const b=P.b,x=P.d,code=verifyCode(str);
+  const s2={...DEFAULT_SETTINGS,bizName:b.n,ownerName:b.o,phone:b.p,email:b.e,address:b.a,website:b.w,taxLabel:b.tl,taxNumber:b.tn,headerNote:b.h,footerNote:b.f,logo:''};
+  const d={type:'estimate',number:x.n,date:x.dt,due:x.du,client:x.c,items:x.i.map(r=>({desc:r[0],qty:r[1],rate:r[2],taxable:!!r[3]})),discount:x.ds,discountType:x.dsT,taxLabel:x.tl,taxRate:x.tr,tax2Label:x.t2l,tax2Rate:x.t2r,
+    deposit:x.dp,depositType:x.dpT,notes:x.nt,terms:x.tm,photos:[],status:'sent'};
+  const c=calc(d);document.title=`Estimate ${d.number} – ${b.n}`;
+  top.innerHTML=`<div class="brand"><div class="logo" style="color:var(--red)">${ic('est','width="22" height="22"')}</div><h1>${esc(b.n)}</h1></div>`;
+  const expired=d.due&&d.due<today();
+  const draw=()=>{v.innerHTML=`<div class="card" style="text-align:center"><div class="small">Estimate ${esc(d.number)} for ${esc(d.client.name)}</div><div style="font-size:26px;font-weight:750;margin:4px 0">${fmtMoney(c.total)}</div>
+      ${c.deposit?`<div style="color:var(--red);font-weight:650">Deposit required: ${fmtMoney(c.deposit)}</div>`:''}${d.due?`<div class="small" style="${expired?'color:var(--red);font-weight:650':''}">${expired?'This estimate expired on':'Valid until'} ${fmtDate(d.due)}</div>`:''}</div>
+    ${paperHTML(d,s2)}
+    ${d.signatureData?`<div class="card" style="border:2px solid var(--green)"><h2 style="color:var(--green)">${ic('check','width="18" height="18" style="vertical-align:-3px"')} Thank you – estimate accepted</h2>
+       <p class="small" style="margin-top:-4px">Send the signed copy back to ${esc(b.n)} so they can book your job.</p>
+       <button class="btn btn-p btn-block" id="rsShare">${ic('share')} Send signed copy</button>
+       <div class="btn-row mt">${b.p?`<a class="btn btn-s" id="rsWa" href="https://wa.me/${phoneDigits(b.p)}?text=${encodeURIComponent(`I accept estimate ${d.number} (${fmtMoney(c.total)}). Verification code: ${code}. – ${d.signedName}`)}" target="_blank" rel="noopener">${ic('wa')} WhatsApp</a>`:''}
+         ${b.e?`<a class="btn btn-s" id="rsMail" href="mailto:${encodeURIComponent(b.e)}?subject=${encodeURIComponent('Signed estimate '+d.number)}&body=${encodeURIComponent(`I accept estimate ${d.number} (${fmtMoney(c.total)}).\nVerification code: ${code}\n\n${d.signedName}`)}">${ic('mail')} Email</a>`:''}
+         <button class="btn btn-s" id="rsDl">${ic('dl')} Save PDF</button></div>
+       <p class="small mt">If WhatsApp or email doesn't attach the PDF, tap “Save PDF” and attach it from your Downloads.</p></div>`
+    :`<div class="card"><h2>Accept this estimate</h2>
+      <label class="f"><span>Your full name</span><input class="i" id="rsName" value="${esc(d.client.name)}"></label>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span class="small" style="font-weight:550">Sign below with your finger</span><button type="button" class="linkbtn" style="margin:0" id="rsClear">Clear</button></div>
+      <canvas class="sigpad" id="rsPad"></canvas>
+      <label class="chk mt"><input type="checkbox" id="rsAgree"> I accept this estimate${d.terms?' and its terms':''}.</label></div>
+     <button class="btn btn-p btn-block" id="rsSign">${ic('check')} Accept &amp; sign</button>
+     <p class="small" style="text-align:center;margin-top:12px">Free – no app or account needed. Verification code ${code}</p>`}`;
+    if(d.signatureData){
+      const pdf=async()=>{const p=await buildPDF(d,{settings:s2});return new File([p.output('blob')],`Signed-estimate-${d.number}.pdf`,{type:'application/pdf'})};
+      v.querySelector('#rsDl').onclick=async()=>{const f=await pdf();saveBlob(f,f.name);toast('PDF saved')};
+      v.querySelector('#rsShare').onclick=async()=>{try{const f=await pdf();const text=`I accept estimate ${d.number} (${fmtMoney(c.total)}). Verification code: ${code}.`;
+        if(navigator.canShare&&navigator.canShare({files:[f]}))await navigator.share({files:[f],title:'Signed estimate '+d.number,text});else{saveBlob(f,f.name);toast('PDF saved – send it with WhatsApp or email below')}}catch(e){if(e.name!=='AbortError')toast('Could not share')}};
+      return}
+    const pad=makePad(v.querySelector('#rsPad'));v.querySelector('#rsClear').onclick=pad.clear;
+    v.querySelector('#rsSign').onclick=()=>{const name=v.querySelector('#rsName').value.trim();
+      if(!name)return toast('Please type your name');if(!pad.drawn())return toast('Please sign in the box');if(!v.querySelector('#rsAgree').checked)return toast('Please tick the box to accept');
+      Object.assign(d,{signatureData:pad.data(),signedName:name,signedAt:new Date().toISOString(),verifyCode:code,status:'accepted'});draw();window.scrollTo(0,0);toast('Signed – now send it back')};
+  };
+  draw();
 }
 
 /* ---------- Install prompt & SW ---------- */
